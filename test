@@ -1,0 +1,181 @@
+Function MovLoadU(Segments As Variant, LoadPosition As Variant, Supports As Variant, DLoads As Variant, PLoads As Variant, _
+    Vehicle As Variant, OutActions As Variant, Optional Units As Variant, Optional Factors As Variant, Optional Ax1X As Double = 0) As Variant
+    
+    Dim OutUnits(1 To 1, 1 To 5) As String, OutX() As Variant, OutX2() As Variant, NumActions As Long, Action As String, i As Long, j As Long, k As Long
+    Dim LoadFact As Double, NumAx As Long, BeamLen As Double, NumSteps As Long, NumSeg As Long, NumStatic As Long, NumSupports As Long
+    Dim MovPLoad As Variant, X1 As Double, ResA As Variant, ResA2() As Variant, Off1 As Long, Off2 As Long, ErrType As Long, ErrMsg As String
+    Dim Segments2 As Variant, OutX3 As Variant, DLoads2 As Variant, OutUnits2 As Variant, Supports2 As Variant
+    
+    On Error GoTo RtnError
+    If IsMissing(Factors) = False Then
+        LoadFact = -Factors(1, 1) * Factors(2, 1) * Factors(3, 1)
+    Else
+        LoadFact = -1
+    End If
+    
+    Segments = EndDown(Segments, NumSeg)
+    LoadPosition = EndDown(LoadPosition, NumSteps)
+    NumSteps = NumSteps - 1
+    Supports = EndDown(Supports, NumSupports)
+    DLoads = EndDown(DLoads)
+    PLoads = EndDown(PLoads, NumStatic)
+    NumStatic = NumStatic - 1
+    Vehicle = EndDown(Vehicle, NumAx)
+    NumAx = NumAx - 1
+    BeamLen = Segments(UBound(Segments), 1)
+    OutActions = WorksheetFunction.Transpose(OutActions)
+    NumActions = UBound(OutActions)
+    
+    ' Check segment and support data
+    ErrType = CheckInput(ErrMsg, Segments, NumSeg, Supports, NumSupports, OutActions, NumActions)
+    If ErrType <> 0 Then GoTo RtnError
+    
+    If IsMissing(Units) = False Then
+        OutUnits(1, 1) = "m"
+        OutUnits(1, 2) = Units(1, 1)
+        OutUnits(1, 3) = Units(2, 1)
+        OutUnits(1, 4) = ""
+        OutUnits(1, 5) = Units(3, 1)
+    End If
+    If OutUnits(1, 1) = "" Then
+        OutUnits(1, 1) = Vehicle(1, 2)
+        OutUnits(1, 2) = Vehicle(1, 2) & Vehicle(1, 1)
+        OutUnits(1, 3) = ""
+        OutUnits(1, 4) = Vehicle(1, 1)
+    End If
+    
+    
+    ReDim ResA2(1 To NumSteps + 1, 1 To NumActions)
+    
+    ReDim OutX(1 To NumActions, 1 To 3)
+    ReDim OutX2(1 To NumActions + 1, 1 To 1)
+    For i = 1 To NumActions
+        OutX(i, 1) = OutActions(i, 2)
+        
+        OutX(i, 3) = i
+        If OutActions(i, 1) <> 0 Then
+            Action = VBA.LCase(Left(OutActions(i, 1), 2))
+            Select Case Action
+                Case Is = "sh"
+                OutX(i, 2) = 2
+                Case Is = "mo"
+                OutX(i, 2) = 3
+                Case Is = "sl"
+                OutX(i, 2) = 4
+                Case Is = "de"
+                OutX(i, 2) = 5
+                Case Else
+                OutX(i, 2) = "Invalid Action"
+            End Select
+        Else
+            OutX(i, 2) = OutX(i - 1, 2)
+        End If
+    Next i
+    
+    OutX = SortV(OutX, 1)
+    ReDim OutX2(1 To UBound(OutX) + 1, 1 To 1)
+    OutX2(1, 1) = Vehicle(1, 1)
+    For j = 1 To NumActions
+        OutX2(j + 1, 1) = OutX(j, 1)
+    Next j
+    
+    For i = 1 To NumSteps
+        
+        Segments2 = Segments
+        OutX3 = OutX2
+        Supports2 = Supports
+        DLoads2 = DLoads
+        OutUnits2 = OutUnits
+        
+        ' Create point load array for each vehicle position
+        ReDim MovPLoad(1 To NumStatic + NumAx + 1, 1 To 3)
+        For j = 1 To NumStatic + 1
+            For k = 1 To 3
+                MovPLoad(j, k) = PLoads(j, k)
+            Next k
+        Next j
+        
+        j = 1
+        X1 = LoadPosition(i + 1, 1)
+        If X1 < 0 Then
+            ' step through axles until first one on beam
+            If Vehicle(3, 1) > 0 Then
+                Do
+                    j = j + 1
+                    X1 = X1 + Vehicle(j + 1, 1)
+                Loop While X1 < 0 And j < NumAx
+            Else
+                Exit For
+            End If
+            ElseIf X1 > BeamLen Then
+            If Vehicle(3, 1) < 0 Then
+                Do
+                    j = j + 1
+                    X1 = X1 + Vehicle(j + 1, 1)
+                Loop While X1 > BeamLen And j < NumAx
+            Else
+                Exit For
+            End If
+        End If
+        
+        '  Add axle loads to MovPload
+        k = NumStatic + 2
+        If Vehicle(3, 1) > 0 Then
+            Do While X1 <= BeamLen And j <= NumAx
+                MovPLoad(k, 1) = X1
+                MovPLoad(k, 2) = Vehicle(j + 1, 2) * LoadFact
+                j = j + 1
+                k = k + 1
+                If j <= NumAx Then X1 = X1 + Vehicle(j + 1, 1)
+            Loop
+        Else
+            Do While X1 >= 0 And j <= NumAx
+                MovPLoad(k, 1) = X1
+                MovPLoad(k, 2) = Vehicle(j + 1, 2) * LoadFact
+                j = j + 1
+                k = k + 1
+                If j <= NumAx Then X1 = X1 + Vehicle(j + 1, 1)
+            Loop
+        End If
+        
+        If Ax1X = 0 Then
+            ResA = ConBeamU(Segments2, OutX3, Supports2, DLoads2, MovPLoad, OutUnits, 1, True)
+            
+            k = 1
+            For j = 1 To NumActions
+                Do While OutX(j, 1) - ResA(k, 1) > Tol
+                k = k + 1
+                Loop
+                Off1 = OutX(j, 2)  ' Action type
+                Off2 = OutX(j, 3)  ' Output column
+                
+                If ResA(k, Off1) = "" Then
+                ResA2(i + 1, Off2) = 0
+                Else
+                ResA2(i + 1, Off2) = ResA(k, Off1)
+                End If
+                
+            Next j
+        Else
+            If LoadPosition(i + 1, 1) = Ax1X Then
+                MovLoadU = MovPLoad
+                Exit Function
+            End If
+        End If
+    Next i
+    
+    For j = 1 To NumActions
+        Off1 = OutX(j, 2)  ' Action type
+        Off2 = OutX(j, 3)  ' Output column
+        
+        ResA2(1, Off2) = OutUnits(1, Off1)
+    Next j
+    
+    MovLoadU = ResA2  '
+    Exit Function
+    
+RtnError:
+    
+    MovLoadU = ErrMsg
+    
+End Function
